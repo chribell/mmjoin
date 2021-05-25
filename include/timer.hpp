@@ -34,8 +34,7 @@ struct timer {
         double sum = 0.0;
         for(auto& interval : intervals) {
             if (interval->name == name) {
-                sum += (std::chrono::duration_cast<std::chrono::microseconds>
-                                (interval->end - interval->begin).count() / 1000.0);
+                sum += std::chrono::duration_cast<std::chrono::milliseconds>(interval->end - interval->begin).count();
             }
         }
         return sum;
@@ -43,8 +42,7 @@ struct timer {
     double total() const {
         double total = 0.0;
         for(auto& interval : intervals) {
-            total += (std::chrono::duration_cast<std::chrono::microseconds>
-                              (interval->end - interval->begin).count() / 1000.0);
+            total += std::chrono::duration_cast<std::chrono::milliseconds>(interval->end - interval->begin).count();
         }
         return total;
     }

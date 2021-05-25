@@ -5,8 +5,44 @@ This is an extension of the original MMJoin implementation as described in [1], 
 
 ### How it works
 
+Input dataset:
+```
+R0: 2 11
+R1: 10 11
+R2: 3 4 5 11
+R3: 3 5 10 11
+R4: 5 6 7 11
+```
+Index:
+```
+I(0) = I(1) = I(8) = I(9) = []
+I(2) = [R0]
+I(3) = [R2, R3]
+I(4) = [R2]
+I(5) = [R2, R3, R4]
+I(6) = [R4]
+I(7) = [R4]
+I(10) = [R1, R3]
+I(11) = [R0, R1, R2, R3, R4]
+```
+
+Input sets must be sorted by set size in ascending order.
+
+We want to find:
+- the number of pairs of sets where one is contained within the other set (SCJ), or
+- the number of pairs of sets where each pair shares c common elements (SSJ)
+
+The main reasoning is to distinguish sets into light and heavy based on the set degree/size. The same applies also for set elements, based on the inverted list degree/size.
+
+Suppose that the cutoff degree for sets and elements is equal to 3. Thus, there are two light sets, i.e. R0 and R1, since their degree is less than 3. The rest, i.e. R2-R4 are are characterized as heavy sets. For the set elements, only 5 and 11 are characterized as heavy elements since the respective inverted lists' sizes are greater than 3.
+
+To process the join:
+- We use the inverted index for the light sets
+- We use the inverted index for the light elements of the heavy sets
+- We use the matrix multiplication for the heavy elements of the heavy sets
+
 ### Build
-In order to succesfully build the executable, you will need to have to installed
+In order to succesfully build the executable, you will need to have installed
 - The Eigen library
 - The Intel MKL library
 - OpenMP

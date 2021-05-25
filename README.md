@@ -34,7 +34,7 @@ We want to find:
 
 The main reasoning is to distinguish sets into light and heavy based on the set degree/size. The same applies also for set elements, based on the inverted list degree/size.
 
-Suppose that the cutoff degree for sets and elements is equal to 3. Thus, there are two light sets, i.e. R0 and R1, since their degree is less than 3. The rest, i.e. R2-R4 are are characterized as heavy sets. For the set elements, only 5 and 11 are characterized as heavy elements since the respective inverted lists' sizes are greater than 3.
+Suppose that the cutoff degree for sets and elements is equal to 3. Thus, there are two light sets, i.e. R0 and R1, since their degree is less than 3. The rest, i.e. R2-R4 are characterized as heavy sets. For the set elements, only 5 and 11 are characterized as heavy elements since the respective inverted lists' sizes are greater than 3.
 
 To process the join:
 - We use the inverted index for the light sets

@@ -34,7 +34,7 @@ struct timer {
         double sum = 0.0;
         for(auto& interval : intervals) {
             if (interval->name == name) {
-                sum += std::chrono::duration_cast<std::chrono::milliseconds>(interval->end - interval->begin).count();
+                sum += (double) std::chrono::duration_cast<std::chrono::microseconds>(interval->end - interval->begin).count();
             }
         }
         return sum;
@@ -42,7 +42,7 @@ struct timer {
     double total() const {
         double total = 0.0;
         for(auto& interval : intervals) {
-            total += std::chrono::duration_cast<std::chrono::milliseconds>(interval->end - interval->begin).count();
+            total += (double) std::chrono::duration_cast<std::chrono::microseconds>(interval->end - interval->begin).count();
         }
         return total;
     }
@@ -54,10 +54,10 @@ struct timer {
                 distinctNames.push_back(interval->name);
         }
         for(auto& name : distinctNames) {
-            fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, name, sum(name));
+            fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, name, sum(name) / 1000.0);
         }
         fmt::print("└{1:─^{0}}┘\n", 51, "");
-        fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, "Total", total());
+        fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, "Total", total() / 1000.0);
         fmt::print("└{1:─^{0}}┘\n", 51, "");
     }
     ~timer() {

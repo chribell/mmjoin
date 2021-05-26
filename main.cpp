@@ -282,6 +282,19 @@ int main(int argc, char** argv)
                 ""
         );
 
+        ull indexBytes = sizeof(unsigned int) * relationSize;
+        ull mmBytes = (sizeof(float) * heavySets * heavyElements * 2) + (sizeof(float) * heavySets * heavySets);
+
+        fmt::print(
+                "┌{0:─^{1}}┐\n"
+                "│{3: ^{2}}|{4: ^{2}}│\n"
+                "│{5: ^{2}}|{6: ^{2}}│\n"
+                "│{7: ^{2}}|{8: ^{2}}│\n"
+                "└{9:─^{1}}┘\n", "Memory Requirements", 51, 25,
+                "Raw dataset", formatBytes(indexBytes),
+                "Index", formatBytes(indexBytes),
+                "Matrix multiplication", formatBytes(mmBytes), "");
+
         uint_vector counts(threads, 0);
         omp_set_num_threads(threads);
 
@@ -348,19 +361,6 @@ int main(int argc, char** argv)
             }
             idx++;
         }
-
-        ull indexBytes = sizeof(unsigned int) * relationSize;
-        ull mmBytes = (sizeof(float) * heavySets * heavyElements * 2) + (sizeof(float) * heavySets * heavySets);
-
-        fmt::print(
-                "┌{0:─^{1}}┐\n"
-                "│{3: ^{2}}|{4: ^{2}}│\n"
-                "│{5: ^{2}}|{6: ^{2}}│\n"
-                "│{7: ^{2}}|{8: ^{2}}│\n"
-                "└{9:─^{1}}┘\n", "Memory Requirements", 51, 25,
-                "Raw dataset", formatBytes(indexBytes),
-                "Index", formatBytes(indexBytes),
-                "Matrix multiplication", formatBytes(mmBytes), "");
 
         Eigen::MatrixXf B;
         B.noalias() = A * A.transpose(); // self-join

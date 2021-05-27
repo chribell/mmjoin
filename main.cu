@@ -339,7 +339,7 @@ int main(int argc, char** argv)
         }
         timer::finish(indexBasedLightJoin);
 
-		if (heavySets > 0) {
+        if (heavySets > 0) {
             timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
             std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
             unsigned int columnIndex = 0;

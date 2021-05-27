@@ -1,14 +1,15 @@
 cmake_minimum_required(VERSION 3.19)
-project(matrix_multi)
+project(mmjoin CUDA CXX)
 
+set(CMAKE_CUDA_STANDARD 14)
 set(CMAKE_CXX_STANDARD 14)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -O3 -Ofast -march=native -mfma -fopenmp -mavx -fomit-frame-pointer -ffp-contract=fast -flto -DARMA_NO_DEBUG")
+# set host compiler to system's g++, CUDA's integrated doesn't work well with fmt
+set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Ofast -march=native -fopenmp")
 
 # for debugging
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mfma -mavx -fopenmp -fomit-frame-pointer -ffp-contract=fast -flto")
-
-find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 
 include(FetchContent)
 
@@ -29,17 +30,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fmt)
 
-add_executable(mmjoin main.cpp)
+
+add_executable(mmjoin main.cu)
+target_compile_features(mmjoin PRIVATE cxx_std_14)
+set_target_properties(
+        mmjoin
+        PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(mmjoin PROPERTIES CUDA_ARCHITECTURES "61")
+
 target_include_directories(mmjoin PUBLIC include)
 target_include_directories(mmjoin PUBLIC ${cxxopts_SOURCE_DIR}/include)
-target_include_directories(mmjoin PUBLIC /opt/intel/mkl/include)
+target_include_directories(mmjoin PUBLIC ${fmt_SOURCE_DIR}/include)
 
-# use libmkl_gnu_thread instead of libmkl_intel_thread
-# iomp5 also breaks behavior, prefer just -fopenmp
-target_link_libraries(mmjoin
-        /opt/intel/mkl/lib/intel64/libmkl_intel_lp64.a
-        /opt/intel/mkl/lib/intel64/libmkl_gnu_thread.a
-        /opt/intel/mkl/lib/intel64/libmkl_core.a
-        pthread m dl)
-
-target_link_libraries(mmjoin fmt::fmt Eigen3::Eigen)
+target_link_libraries(mmjoin fmt::fmt -lcublas)

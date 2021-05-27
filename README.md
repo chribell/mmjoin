@@ -80,7 +80,6 @@ make -j4
 ```
 ### TODO
  - Optimize matrix multiplication to produce only the upper triangle (without the diagonal)
- - Offload matrix multiplication to the GPU
  
 ### References
 

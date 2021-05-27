@@ -8,10 +8,9 @@
 #include <unordered_map>
 #include <sstream>
 #include <omp.h>
-#define EIGEN_USE_MKL_ALL
-#include "Eigen/Dense"
-
+#include <cublas_v2.h>
 #include <cxxopts.hpp>
+#include <thrust/device_ptr.h>
 #include <fmt/core.h>
 //#include <fmt/ranges.h>
 #include "timer.hpp"
@@ -340,84 +339,118 @@ int main(int argc, char** argv)
         }
         timer::finish(indexBasedLightJoin);
 
-        timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
-        std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
-        unsigned int columnIndex = 0;
-        for (unsigned int i = lightElements; i < degreeElement.size(); ++i) {
-            heavyElementMap[degreeElement[i].second] = columnIndex++;
-        }
+		if (heavySets > 0) {
+	        timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
+    	    std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
+        	unsigned int columnIndex = 0;
+	        for (unsigned int i = lightElements; i < degreeElement.size(); ++i) {
+    	        heavyElementMap[degreeElement[i].second] = columnIndex++;
+        	}
 
-        Eigen::MatrixXf A;
+	        auto* A = new float[heavySets * heavyElements];
+    	    auto* B = new float[heavySets * heavyElements];
+        	auto* C = new float[heavySets * heavySets];
 
-        A.resize(heavySets, heavyElements);
-        A.setZero();
+	        unsigned int idx = 0; // used to determine column index
+    	    for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
+        	    for (auto& el : collection[i].elements) {
+            	    if (index[el].size() >= deltaElement) {
+                	    A[idx * heavyElements + heavyElementMap[el]] = 1.0f;
+                    	B[heavyElementMap[el] * heavySets + idx] = 1.0f;
+	                }
+    	        }
+        	    idx++;
+	        }
 
-        unsigned int idx = 0; // used to determine column index
-        for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
-            for (auto& el : collection[i].elements) {
-                if (index[el].size() >= deltaElement) {
-                    A.coeffRef(idx, heavyElementMap[el]) = 1.0f;
-                }
-            }
-            idx++;
-        }
+    	    float* devA;
+        	float* devB;
+	        float* devC;
 
-        Eigen::MatrixXf B;
-        B.noalias() = A * A.transpose(); // self-join
-        timer::finish(matrixMultiplication);
+	        // allocate GPU memory 
+    	    cudaMalloc((void**) &devA, heavySets * heavyElements * sizeof(float));
+	        cudaMalloc((void**) &devB, heavySets * heavyElements * sizeof(float));
+        	cudaMalloc((void**) &devC, heavySets * heavySets * sizeof(float));
 
-        timer::Interval* indexBasedHeavyJoin = t.add("Index-based join (heavy)");
-        #pragma omp parallel
-        {
-            int threadNumber = omp_get_thread_num();
-            uint_vector joinVector(heavySets);
+			// copy arrays to GPU
+	        cudaMemcpy(devA, A, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+    	    cudaMemcpy(devB, B, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
 
-            // calculate thread bounds
-            unsigned int lower = heavySetLow + (heavySets * threadNumber / threads);
-            unsigned int upper = heavySetLow + (heavySets * (threadNumber + 1) / threads);
+	        cublasHandle_t handle;
+    	    cublasCreate(&handle);
 
-            // debug
-            // fmt::print("Heavy sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
+        	float alpha = 1.f;
+	        float beta = 0.f;
 
-            unsigned int counter = 0;
+			// https://peterwittek.com/cublas-matrix-c-style.html
+    	    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+        	            heavySets, heavySets, heavyElements,
+            	        &alpha, thrust::raw_pointer_cast(&devA[0]), heavySets,
+                	    thrust::raw_pointer_cast(&devB[0]), heavyElements,
+                    	&beta,  thrust::raw_pointer_cast(&devC[0]), heavySets);
+        
+			// cudaDeviceSynchronize();
+	        cudaMemcpy(C, devC, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
 
-            for (unsigned int i = lower; i < upper; ++i) {
-                auto& probe = collection[i].elements;
+    	    cudaFree(devA);
+        	cudaFree(devB);
+	        cudaFree(devC);
 
-                unsigned int rowIndex = i - heavySetLow;
-                unsigned int colStart = rowIndex + 1;
+    	    timer::finish(matrixMultiplication);
 
-                std::fill(joinVector.begin() + colStart, joinVector.end(), 0);
 
-                for (auto& el : probe) {
-                    auto& list = index[el];
-                    if (list.size() < deltaElement) { // for the light tokens of the heavy set, use index
-                        for (auto& set : list) {
-                            if (set > i) {
-                                joinVector[set - heavySetLow]++;
-                            }
-                        }
-                    }
-                }
+	        timer::Interval* indexBasedHeavyJoin = t.add("Index-based join (heavy)");
+    	    #pragma omp parallel
+        	{
+            	int threadNumber = omp_get_thread_num();
+	            uint_vector joinVector(heavySets);
 
-                // add intersections from matrix multiplication
-                for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
-                    joinVector[colIndex] += (unsigned int) B.coeff(rowIndex, colIndex);
-                }
+    	        // calculate thread bounds
+        	    unsigned int lower = heavySetLow + (heavySets * threadNumber / threads);
+            	unsigned int upper = heavySetLow + (heavySets * (threadNumber + 1) / threads);
 
-                if (scj) {
-                    c = probe.size();
-                }
+	            // debug
+    	        // fmt::print("Heavy sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
 
-                counter += std::count_if(joinVector.begin() + colStart, joinVector.end(), [c](unsigned int intersection) {
-                    return intersection >= c;
-                });
-            }
+        	    unsigned int counter = 0;
 
-            counts[threadNumber] += counter;
-        }
+            	for (unsigned int i = lower; i < upper; ++i) {
+                	auto& probe = collection[i].elements;
 
-        timer::finish(indexBasedHeavyJoin);
+	                unsigned int rowIndex = i - heavySetLow;
+    	            unsigned int colStart = rowIndex + 1;
+
+        	        std::fill(joinVector.begin() + colStart, joinVector.end(), 0);
+	
+    	            for (auto& el : probe) {
+        	            auto& list = index[el];
+            	        if (list.size() < deltaElement) { // for the light tokens of the heavy set, use index
+                	        for (auto& set : list) {
+                    	        if (set > i) {
+                        	        joinVector[set - heavySetLow]++;
+                            	}
+	                        }
+    	                }
+        	        }
+
+            	    // add intersections from matrix multiplication
+                	for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
+                    	joinVector[colIndex] += (unsigned int) C[rowIndex * heavyElements + colIndex]; // B.coeff(rowIndex, colIndex);
+	                }
+	
+    	            if (scj) {
+        	            c = probe.size();
+            	    }
+
+                	counter += std::count_if(joinVector.begin() + colStart, joinVector.end(), [c](unsigned int intersection) {
+                    	return intersection >= c;
+	                });
+    	        }
+
+        	    counts[threadNumber] += counter;
+	        }
+
+	        timer::finish(indexBasedHeavyJoin);
+		}
 
         t.print();
 

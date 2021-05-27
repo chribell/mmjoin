@@ -33,6 +33,7 @@ FetchContent_MakeAvailable(fmt)
 
 add_executable(mmjoin main.cu)
 target_compile_features(mmjoin PRIVATE cxx_std_14)
+target_compile_options(mmjoin PRIVATE -Xcompiler -fopenmp)
 set_target_properties(
         mmjoin
         PROPERTIES

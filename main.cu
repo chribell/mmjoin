@@ -340,117 +340,117 @@ int main(int argc, char** argv)
         timer::finish(indexBasedLightJoin);
 
 		if (heavySets > 0) {
-	        timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
-    	    std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
-        	unsigned int columnIndex = 0;
-	        for (unsigned int i = lightElements; i < degreeElement.size(); ++i) {
-    	        heavyElementMap[degreeElement[i].second] = columnIndex++;
-        	}
+            timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
+            std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
+            unsigned int columnIndex = 0;
+            for (unsigned int i = lightElements; i < degreeElement.size(); ++i) {
+                heavyElementMap[degreeElement[i].second] = columnIndex++;
+            }
 
-	        auto* A = new float[heavySets * heavyElements];
-    	    auto* B = new float[heavySets * heavyElements];
-        	auto* C = new float[heavySets * heavySets];
+            auto* A = new float[heavySets * heavyElements];
+            auto* B = new float[heavySets * heavyElements];
+            auto* C = new float[heavySets * heavySets];
 
-	        unsigned int idx = 0; // used to determine column index
-    	    for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
-        	    for (auto& el : collection[i].elements) {
-            	    if (index[el].size() >= deltaElement) {
-                	    A[idx * heavyElements + heavyElementMap[el]] = 1.0f;
-                    	B[heavyElementMap[el] * heavySets + idx] = 1.0f;
-	                }
-    	        }
-        	    idx++;
-	        }
+            unsigned int idx = 0; // used to determine column index
+            for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
+                for (auto& el : collection[i].elements) {
+                    if (index[el].size() >= deltaElement) {
+                        A[idx * heavyElements + heavyElementMap[el]] = 1.0f;
+                        B[heavyElementMap[el] * heavySets + idx] = 1.0f;
+                    }
+                }
+                idx++;
+            }
 
-    	    float* devA;
-        	float* devB;
-	        float* devC;
+            float* devA;
+            float* devB;
+            float* devC;
 
-	        // allocate GPU memory 
-    	    cudaMalloc((void**) &devA, heavySets * heavyElements * sizeof(float));
-	        cudaMalloc((void**) &devB, heavySets * heavyElements * sizeof(float));
-        	cudaMalloc((void**) &devC, heavySets * heavySets * sizeof(float));
+            // allocate GPU memory
+            cudaMalloc((void**) &devA, heavySets * heavyElements * sizeof(float));
+            cudaMalloc((void**) &devB, heavySets * heavyElements * sizeof(float));
+            cudaMalloc((void**) &devC, heavySets * heavySets * sizeof(float));
 
-			// copy arrays to GPU
-	        cudaMemcpy(devA, A, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
-    	    cudaMemcpy(devB, B, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+            // copy arrays to GPU
+            cudaMemcpy(devA, A, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+            cudaMemcpy(devB, B, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
 
-	        cublasHandle_t handle;
-    	    cublasCreate(&handle);
+            cublasHandle_t handle;
+            cublasCreate(&handle);
 
-        	float alpha = 1.f;
-	        float beta = 0.f;
+            float alpha = 1.f;
+            float beta = 0.f;
 
-			// https://peterwittek.com/cublas-matrix-c-style.html
-    	    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-        	            heavySets, heavySets, heavyElements,
-            	        &alpha, thrust::raw_pointer_cast(&devA[0]), heavySets,
-                	    thrust::raw_pointer_cast(&devB[0]), heavyElements,
-                    	&beta,  thrust::raw_pointer_cast(&devC[0]), heavySets);
-        
-			// cudaDeviceSynchronize();
-	        cudaMemcpy(C, devC, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
+            // https://peterwittek.com/cublas-matrix-c-style.html
+            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                        heavySets, heavySets, heavyElements,
+                        &alpha, thrust::raw_pointer_cast(&devA[0]), heavySets,
+                        thrust::raw_pointer_cast(&devB[0]), heavyElements,
+                        &beta,  thrust::raw_pointer_cast(&devC[0]), heavySets);
 
-    	    cudaFree(devA);
-        	cudaFree(devB);
-	        cudaFree(devC);
+            // cudaDeviceSynchronize();
+            cudaMemcpy(C, devC, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
 
-    	    timer::finish(matrixMultiplication);
+            cudaFree(devA);
+            cudaFree(devB);
+            cudaFree(devC);
+
+            timer::finish(matrixMultiplication);
 
 
-	        timer::Interval* indexBasedHeavyJoin = t.add("Index-based join (heavy)");
-    	    #pragma omp parallel
-        	{
-            	int threadNumber = omp_get_thread_num();
-	            uint_vector joinVector(heavySets);
+            timer::Interval* indexBasedHeavyJoin = t.add("Index-based join (heavy)");
+            #pragma omp parallel
+            {
+                int threadNumber = omp_get_thread_num();
+                uint_vector joinVector(heavySets);
 
-    	        // calculate thread bounds
-        	    unsigned int lower = heavySetLow + (heavySets * threadNumber / threads);
-            	unsigned int upper = heavySetLow + (heavySets * (threadNumber + 1) / threads);
+                // calculate thread bounds
+                unsigned int lower = heavySetLow + (heavySets * threadNumber / threads);
+                unsigned int upper = heavySetLow + (heavySets * (threadNumber + 1) / threads);
 
-	            // debug
-    	        // fmt::print("Heavy sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
+                // debug
+                // fmt::print("Heavy sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
 
-        	    unsigned int counter = 0;
+                unsigned int counter = 0;
 
-            	for (unsigned int i = lower; i < upper; ++i) {
-                	auto& probe = collection[i].elements;
+                for (unsigned int i = lower; i < upper; ++i) {
+                    auto& probe = collection[i].elements;
 
-	                unsigned int rowIndex = i - heavySetLow;
-    	            unsigned int colStart = rowIndex + 1;
+                    unsigned int rowIndex = i - heavySetLow;
+                    unsigned int colStart = rowIndex + 1;
 
-        	        std::fill(joinVector.begin() + colStart, joinVector.end(), 0);
-	
-    	            for (auto& el : probe) {
-        	            auto& list = index[el];
-            	        if (list.size() < deltaElement) { // for the light tokens of the heavy set, use index
-                	        for (auto& set : list) {
-                    	        if (set > i) {
-                        	        joinVector[set - heavySetLow]++;
-                            	}
-	                        }
-    	                }
-        	        }
+                    std::fill(joinVector.begin() + colStart, joinVector.end(), 0);
 
-            	    // add intersections from matrix multiplication
-                	for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
-                    	joinVector[colIndex] += (unsigned int) C[rowIndex * heavyElements + colIndex]; // B.coeff(rowIndex, colIndex);
-	                }
-	
-    	            if (scj) {
-        	            c = probe.size();
-            	    }
+                    for (auto& el : probe) {
+                        auto& list = index[el];
+                        if (list.size() < deltaElement) { // for the light tokens of the heavy set, use index
+                            for (auto& set : list) {
+                                if (set > i) {
+                                    joinVector[set - heavySetLow]++;
+                                }
+                            }
+                        }
+                    }
 
-                	counter += std::count_if(joinVector.begin() + colStart, joinVector.end(), [c](unsigned int intersection) {
-                    	return intersection >= c;
-	                });
-    	        }
+                    // add intersections from matrix multiplication
+                    for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
+                        joinVector[colIndex] += (unsigned int) C[rowIndex * heavyElements + colIndex];
+                    }
 
-        	    counts[threadNumber] += counter;
-	        }
+                    if (scj) {
+                        c = probe.size();
+                    }
 
-	        timer::finish(indexBasedHeavyJoin);
-		}
+                    counter += std::count_if(joinVector.begin() + colStart, joinVector.end(), [c](unsigned int intersection) {
+                        return intersection >= c;
+                    });
+                }
+
+                counts[threadNumber] += counter;
+            }
+
+            timer::finish(indexBasedHeavyJoin);
+        }
 
         t.print();
 

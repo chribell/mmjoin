@@ -19,5 +19,5 @@ struct set {
 };
 
 typedef std::vector<set> sets;
-typedef unsigned long long ull;
+typedef std::tuple<unsigned int, unsigned int, unsigned int> tile;
 #endif // DEFS_HPP

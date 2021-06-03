@@ -16,9 +16,9 @@
 #include "timer.hpp"
 #include "input.hpp"
 
-std::string formatBytes(ull bytes)
+std::string formatBytes(size_t bytes)
 {
-    ull gb = 1073741824;
+    size_t gb = 1073741824;
     int mb = 1048576;
     int kb = 1024;
 
@@ -39,8 +39,28 @@ std::string formatBytes(ull bytes)
 }
 
 
+void transpose(float* out, const float* in, int rows, int cols) {
+    unsigned int c = 0;
+    for (int i = 0; i < rows; ++i){
+        for (int j = 0; j < cols; ++j) {
+            out[c++] = in[(j * rows + i)];
+        }
+    }
+}
+
+void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols, unsigned int offset)
+{
+    unsigned int c = 0;
+    for (unsigned int i = 0; i < rows; ++i) {
+        for (unsigned int j = 0; j < cols; ++j) {
+            out[j] = in[c++];
+        }
+        out += offset;
+    }
+}
+
 degree_pair optimize(sets& collection, double eps, unsigned int iterations,
-                     ull relationSize, ull fullJoinSize, unsigned int relationFactor,
+                     size_t relationSize, size_t fullJoinSize, unsigned int relationFactor,
                      std::vector<degree_pair>& degreeSet, std::vector<degree_pair>& degreeElement,
                      std::vector<cdf_pair>& setCDF, std::vector<cdf_pair>& elementCDF)
 {
@@ -53,12 +73,12 @@ degree_pair optimize(sets& collection, double eps, unsigned int iterations,
     unsigned int delta1 = collection.size();
     unsigned int delta2 = relationSize * (delta1 / outputSizeEstimate);
 
-    ull tHeavy = 0;
-    ull prevHeavy = 0;
-    ull tLight = fullJoinSize / 1000;
-    ull prevLight = LONG_LONG_MAX;
-    ull prevDelta1 = 0;
-    ull prevDelta2 = 0;
+    size_t tHeavy = 0;
+    size_t prevHeavy = 0;
+    size_t tLight = fullJoinSize / 1000;
+    size_t prevLight = LONG_LONG_MAX;
+    size_t prevDelta1 = 0;
+    size_t prevDelta2 = 0;
 
     unsigned int heavySets = 0;
     unsigned int heavyElements = 0;
@@ -156,8 +176,8 @@ int main(int argc, char** argv)
         std::vector<cdf_pair> setCDF;
         std::vector<degree_pair> degreeElement;
         std::vector<cdf_pair> elementCDF;
-        ull relationSize = 0; // aka total number of elements for input relation
-        ull fullJoinSize = 0;
+        size_t relationSize = 0; // aka total number of elements for input relation
+        size_t fullJoinSize = 0;
 
         timer::Interval* constructIndex = t.add("Construct Index");
         for (auto& s : collection) {
@@ -281,62 +301,71 @@ int main(int argc, char** argv)
                 ""
         );
 
-        ull indexBytes = sizeof(unsigned int) * relationSize;
-        ull mmBytes = (sizeof(float) * heavySets * heavyElements * 2) + (sizeof(float) * heavySets * heavySets);
+        size_t indexBytes = sizeof(unsigned int) * relationSize;
+
+        size_t mmBytes = (sizeof(float) * heavySets * heavyElements * 2) + (sizeof(float) * heavySets * heavySets);
+        size_t freeDeviceMemory, totalDeviceMemory;
+
+        cudaMemGetInfo(&freeDeviceMemory, &totalDeviceMemory);
+
+        // subtract 100MB from free GPU memory
+        freeDeviceMemory -= 100 * 1048576;
 
         fmt::print(
                 "┌{0:─^{1}}┐\n"
                 "│{3: ^{2}}|{4: ^{2}}│\n"
                 "│{5: ^{2}}|{6: ^{2}}│\n"
                 "│{7: ^{2}}|{8: ^{2}}│\n"
-                "└{9:─^{1}}┘\n", "Memory Requirements", 51, 25,
+                "│{9: ^{2}}|{10: ^{2}}│\n"
+                "└{11:─^{1}}┘\n", "Memory Requirements", 51, 25,
                 "Raw dataset", formatBytes(indexBytes),
                 "Index", formatBytes(indexBytes),
+                "Free GPU memory", formatBytes(freeDeviceMemory),
                 "Matrix multiplication", formatBytes(mmBytes), "");
 
         uint_vector counts(threads, 0);
         omp_set_num_threads(threads);
 
         timer::Interval* indexBasedLightJoin = t.add("Index-based join (light)");
-        #pragma omp parallel
-        {
-            int threadNumber = omp_get_thread_num();
-            uint_vector joinVector(collection.size());
-
-            // calculate thread bounds
-            unsigned int lower = lightSets * threadNumber / threads;
-            unsigned int upper = lightSets * (threadNumber + 1) / threads;
-
-            // debug
-            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
-
-            unsigned int counter = 0;
-
-            for (unsigned int i = lower; i < upper; ++i) {
-                auto& probe = collection[i].elements;
-                unsigned int offset = i + 1;
-
-                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
-                for (auto& el : probe) {
-                    auto& list = index[el];
-                    for (auto& set : list) {
-                        if (set > i) {
-                            joinVector[set]++;
-                        }
-                    }
-                }
-
-                if (scj) {
-                    c = probe.size();
-                }
-
-                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
-                    return intersection >= c;
-                });
-            }
-
-            counts[threadNumber] = counter;
-        }
+//        #pragma omp parallel
+//        {
+//            int threadNumber = omp_get_thread_num();
+//            uint_vector joinVector(collection.size());
+//
+//            // calculate thread bounds
+//            unsigned int lower = lightSets * threadNumber / threads;
+//            unsigned int upper = lightSets * (threadNumber + 1) / threads;
+//
+//            // debug
+//            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
+//
+//            unsigned int counter = 0;
+//
+//            for (unsigned int i = lower; i < upper; ++i) {
+//                auto& probe = collection[i].elements;
+//                unsigned int offset = i + 1;
+//
+//                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
+//                for (auto& el : probe) {
+//                    auto& list = index[el];
+//                    for (auto& set : list) {
+//                        if (set > i) {
+//                            joinVector[set]++;
+//                        }
+//                    }
+//                }
+//
+//                if (scj) {
+//                    c = probe.size();
+//                }
+//
+//                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
+//                    return intersection >= c;
+//                });
+//            }
+//
+//            counts[threadNumber] = counter;
+//        }
         timer::finish(indexBasedLightJoin);
 
         if (heavySets > 0) {
@@ -347,53 +376,140 @@ int main(int argc, char** argv)
                 heavyElementMap[degreeElement[i].second] = columnIndex++;
             }
 
-            auto* A = new float[heavySets * heavyElements];
-            auto* B = new float[heavySets * heavyElements];
-            auto* C = new float[heavySets * heavySets];
+            float* hostRawInput = new float[heavySets * heavyElements];
+            float* hostInput = new float[heavySets * heavyElements];
+            float* hostInvInput = new float[heavyElements * heavySets];
+            float* hostOutput = new float[heavySets * heavySets];
 
             unsigned int idx = 0; // used to determine column index
             for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
                 for (auto& el : collection[i].elements) {
                     if (index[el].size() >= deltaElement) {
-                        A[idx * heavyElements + heavyElementMap[el]] = 1.0f;
-                        B[heavyElementMap[el] * heavySets + idx] = 1.0f;
+                        hostRawInput[idx * heavyElements + heavyElementMap[el]] = 1.0f;
                     }
                 }
                 idx++;
             }
 
-            float* devA;
-            float* devB;
-            float* devC;
+            cublasHandle_t handle;
+            cublasCreate_v2(&handle);
+
+            float* devInput;
+            float* devInvInput;
+            float* devOutput;
 
             // allocate GPU memory
-            cudaMalloc((void**) &devA, heavySets * heavyElements * sizeof(float));
-            cudaMalloc((void**) &devB, heavySets * heavyElements * sizeof(float));
-            cudaMalloc((void**) &devC, heavySets * heavySets * sizeof(float));
+            cudaMalloc((void**) &devInput, heavySets * heavyElements * sizeof(float));
+            cudaMalloc((void**) &devInvInput, heavySets * heavyElements * sizeof(float));
 
-            // copy arrays to GPU
-            cudaMemcpy(devA, A, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
-            cudaMemcpy(devB, B, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+            // check if tiling is required, this is determined by the available GPU memory
+            // if the complete output join matrix fits in GPU memory we call MM only once,
+            // otherwise, we need tiling to build the output join matrix incrementally
+            // in addition, tiling also affects the way we store and access the input matrices
+            if (mmBytes > freeDeviceMemory) { // tiling to produce the join matrix
 
-            cublasHandle_t handle;
-            cublasCreate(&handle);
+                // subtract the required input matrices sizes (in bytes)
+                // in order to find the max number that a tile can support
+                freeDeviceMemory -= (sizeof(float) * heavySets * heavyElements * 2);
 
-            float alpha = 1.f;
-            float beta = 0.f;
+                unsigned int maxCells = freeDeviceMemory / sizeof(float);
+                unsigned int tileSets = std::sqrt((float) maxCells);
+                unsigned int tileCells = tileSets * tileSets;
 
-            // https://peterwittek.com/cublas-matrix-c-style.html
-            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                        heavySets, heavySets, heavyElements,
-                        &alpha, thrust::raw_pointer_cast(&devA[0]), heavySets,
-                        thrust::raw_pointer_cast(&devB[0]), heavyElements,
-                        &beta,  thrust::raw_pointer_cast(&devC[0]), heavySets);
+                unsigned int tilesX = std::ceil((double) heavySets / (double) tileSets);
+                unsigned int tileElements = tileSets >= heavyElements ? heavyElements : (double) heavyElements / (double) tileSets;
+                std::vector<tile> tiles;
 
-            // cudaDeviceSynchronize();
-            cudaMemcpy(C, devC, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
+                c = 0;
+                for (unsigned int i = 0; i < tilesX; ++i) {
+                    for (unsigned int j = 0; j < tilesX; ++j) {
+                        unsigned int offset = (i * tileSets * heavyElements) + tileElements * j;
 
-            cudaFree(devA);
-            cudaFree(devB);
-            cudaFree(devC);
+                        unsigned int row = 0;
+                        unsigned int col = 0;
+                        unsigned int start = c;
+                        while (row < tileSets && offset < heavySets * heavyElements) {
+                            unsigned int cols = (j + 1) * tileElements > heavyElements ? (j + 1) * tileElements - heavyElements - 1
+                                                                                       : tileElements;
+                            for (col = 0; col < cols; ++col) {
+                                hostInput[c++] = hostRawInput[offset + col];
+                            }
+                            row++;
+                            offset += heavyElements;
+                        }
+                        transpose(hostInvInput + start, hostInput + start, col, row);
+                        tiles.push_back(std::make_tuple(row, col, c - (row * col)));
+//                         std::cout << "(" << row  << " x " << col << "), " <<  c - (row * col) << "\n";
+                    }
+                }
+
+                float* hostBlock = new float[tileCells];
+
+                cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+                cudaMemcpy(devInvInput, hostInvInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+
+                float alpha = 1.f;
+                float beta = 0.f;
+
+                for (unsigned int i = 0; i < tilesX; ++i) {
+                    for (unsigned int j = 0; j < tilesX; ++j) {
+
+                        unsigned int cRows = 0;
+                        unsigned int cCols = 0;
+
+                        for (unsigned int k = 0; k < tilesX; ++k) {
+
+                            tile& tileA = tiles[(i * tilesX) + k]; // sets x elements
+                            tile& tileB = tiles[(j * tilesX) + k]; // elements x sets (transposed)
+
+                            unsigned int aRows = std::get<0>(tileA);
+                            unsigned int aCols = std::get<1>(tileA);
+                            unsigned int aOffset = std::get<2>(tileA);
+
+                            unsigned int bRows = std::get<1>(tileB);
+                            unsigned int bCols = std::get<0>(tileB);
+                            unsigned int bOffset = std::get<2>(tileB);
+
+                            cRows = aRows;
+                            cCols = bCols;
+
+                            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                                        bCols, aRows, aCols,
+                                        &alpha, devInvInput + bOffset, bCols,
+                                        devInput + aOffset, aCols,
+                                        &beta, devOutput, bCols);
+                        }
+                        cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost);
+                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
+                        cudaMemset(devOutput, 0, cRows * cCols * sizeof(float));
+                    }
+                }
+            } else { // single MM to produce the join matrix
+                transpose(hostInvInput, hostInput, heavyElements, heavySets);
+
+                cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+                cudaMemcpy(devInvInput, hostInvInput, heavyElements * heavySets * sizeof(float), cudaMemcpyHostToDevice);
+
+                float alpha = 1.f;
+                float beta = 0.f;
+
+                cudaMalloc((void**) &devOutput, heavySets * heavySets * sizeof(float));
+
+                // https://peterwittek.com/cublas-matrix-c-style.html
+                cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                            heavySets, heavySets, heavyElements,
+                            &alpha, devInvInput, heavySets,
+                            devInput, heavyElements,
+                            &beta, devOutput, heavySets);
+
+                cudaMemcpy(hostOutput, devOutput, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
+            }
+
+            cudaFree(devInput);
+            cudaFree(devInvInput);
+            cudaFree(devOutput);
+
+            cublasDestroy_v2(handle);
 
             timer::finish(matrixMultiplication);
 
@@ -434,7 +550,7 @@ int main(int argc, char** argv)
 
                     // add intersections from matrix multiplication
                     for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
-                        joinVector[colIndex] += (unsigned int) C[rowIndex * heavyElements + colIndex];
+                        joinVector[colIndex] += (unsigned int) hostOutput[rowIndex * heavyElements + colIndex];
                     }
 
                     if (scj) {
@@ -448,7 +564,6 @@ int main(int argc, char** argv)
 
                 counts[threadNumber] += counter;
             }
-
             timer::finish(indexBasedHeavyJoin);
         }
 

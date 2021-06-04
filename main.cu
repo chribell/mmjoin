@@ -15,6 +15,18 @@
 //#include <fmt/ranges.h>
 #include "timer.hpp"
 #include "input.hpp"
+#include <thrust/device_ptr.h>
+
+#define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
+}
+
 
 std::string formatBytes(size_t bytes)
 {
@@ -55,7 +67,6 @@ void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols,
         for (unsigned int j = 0; j < cols; ++j) {
             out[j] = in[c++];
         }
-        out += offset;
     }
 }
 
@@ -327,45 +338,45 @@ int main(int argc, char** argv)
         omp_set_num_threads(threads);
 
         timer::Interval* indexBasedLightJoin = t.add("Index-based join (light)");
-//        #pragma omp parallel
-//        {
-//            int threadNumber = omp_get_thread_num();
-//            uint_vector joinVector(collection.size());
-//
-//            // calculate thread bounds
-//            unsigned int lower = lightSets * threadNumber / threads;
-//            unsigned int upper = lightSets * (threadNumber + 1) / threads;
-//
-//            // debug
-//            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
-//
-//            unsigned int counter = 0;
-//
-//            for (unsigned int i = lower; i < upper; ++i) {
-//                auto& probe = collection[i].elements;
-//                unsigned int offset = i + 1;
-//
-//                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
-//                for (auto& el : probe) {
-//                    auto& list = index[el];
-//                    for (auto& set : list) {
-//                        if (set > i) {
-//                            joinVector[set]++;
-//                        }
-//                    }
-//                }
-//
-//                if (scj) {
-//                    c = probe.size();
-//                }
-//
-//                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
-//                    return intersection >= c;
-//                });
-//            }
-//
-//            counts[threadNumber] = counter;
-//        }
+        #pragma omp parallel
+        {
+            int threadNumber = omp_get_thread_num();
+            uint_vector joinVector(collection.size());
+
+            // calculate thread bounds
+            unsigned int lower = lightSets * threadNumber / threads;
+            unsigned int upper = lightSets * (threadNumber + 1) / threads;
+
+            // debug
+            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
+
+            unsigned int counter = 0;
+
+            for (unsigned int i = lower; i < upper; ++i) {
+                auto& probe = collection[i].elements;
+                unsigned int offset = i + 1;
+
+                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
+                for (auto& el : probe) {
+                    auto& list = index[el];
+                    for (auto& set : list) {
+                        if (set > i) {
+                            joinVector[set]++;
+                        }
+                    }
+                }
+
+                if (scj) {
+                    c = probe.size();
+                }
+
+                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
+                    return intersection >= c;
+                });
+            }
+
+            counts[threadNumber] = counter;
+        }
         timer::finish(indexBasedLightJoin);
 
         if (heavySets > 0) {
@@ -399,8 +410,8 @@ int main(int argc, char** argv)
             float* devOutput;
 
             // allocate GPU memory
-            cudaMalloc((void**) &devInput, heavySets * heavyElements * sizeof(float));
-            cudaMalloc((void**) &devInvInput, heavySets * heavyElements * sizeof(float));
+            cudaCheck(cudaMalloc((void**) &devInput, heavySets * heavyElements * sizeof(float)));
+            cudaCheck(cudaMalloc((void**) &devInvInput, heavySets * heavyElements * sizeof(float)));
 
             // check if tiling is required, this is determined by the available GPU memory
             // if the complete output join matrix fits in GPU memory we call MM only once,
@@ -416,13 +427,14 @@ int main(int argc, char** argv)
                 unsigned int tileSets = std::sqrt((float) maxCells);
                 unsigned int tileCells = tileSets * tileSets;
 
-                unsigned int tilesX = std::ceil((double) heavySets / (double) tileSets);
                 unsigned int tileElements = tileSets >= heavyElements ? heavyElements : (double) heavyElements / (double) tileSets;
+                unsigned int tilesX = std::ceil((double) heavySets / (double) tileSets);
+                unsigned int tilesY = std::ceil((double) heavyElements / (double) tileElements);
                 std::vector<tile> tiles;
 
                 c = 0;
                 for (unsigned int i = 0; i < tilesX; ++i) {
-                    for (unsigned int j = 0; j < tilesX; ++j) {
+                    for (unsigned int j = 0; j < tilesY; ++j) {
                         unsigned int offset = (i * tileSets * heavyElements) + tileElements * j;
 
                         unsigned int row = 0;
@@ -439,17 +451,17 @@ int main(int argc, char** argv)
                         }
                         transpose(hostInvInput + start, hostInput + start, col, row);
                         tiles.push_back(std::make_tuple(row, col, c - (row * col)));
-//                         std::cout << "(" << row  << " x " << col << "), " <<  c - (row * col) << "\n";
                     }
                 }
 
                 float* hostBlock = new float[tileCells];
 
-                cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
-                cudaMemcpy(devInvInput, hostInvInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
+                cudaCheck(cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
+                cudaCheck(cudaMemcpy(devInvInput, hostInvInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
+                cudaCheck(cudaMalloc((void**) &devOutput, tileCells * sizeof(float)))
 
-                float alpha = 1.f;
-                float beta = 0.f;
+                float alpha = 1.0;
+                float beta = 1.0;
 
                 for (unsigned int i = 0; i < tilesX; ++i) {
                     for (unsigned int j = 0; j < tilesX; ++j) {
@@ -457,10 +469,10 @@ int main(int argc, char** argv)
                         unsigned int cRows = 0;
                         unsigned int cCols = 0;
 
-                        for (unsigned int k = 0; k < tilesX; ++k) {
+                        for (unsigned int k = 0; k < tilesY; ++k) {
 
-                            tile& tileA = tiles[(i * tilesX) + k]; // sets x elements
-                            tile& tileB = tiles[(j * tilesX) + k]; // elements x sets (transposed)
+                            tile& tileA = tiles[(i * tilesY) + k]; // sets x elements
+                            tile& tileB = tiles[(j * tilesY) + k]; // elements x sets (transposed)
 
                             unsigned int aRows = std::get<0>(tileA);
                             unsigned int aCols = std::get<1>(tileA);
@@ -473,13 +485,15 @@ int main(int argc, char** argv)
                             cRows = aRows;
                             cCols = bCols;
 
-                            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                            auto status = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                         bCols, aRows, aCols,
-                                        &alpha, devInvInput + bOffset, bCols,
-                                        devInput + aOffset, aCols,
-                                        &beta, devOutput, bCols);
+                                        &alpha, thrust::raw_pointer_cast(&devInvInput[0] + bOffset), bCols,
+                                        thrust::raw_pointer_cast(&devInput[0] + aOffset), aCols,
+                                        &beta, thrust::raw_pointer_cast(&devOutput[0]), cCols);
+                            cudaDeviceSynchronize();
+
                         }
-                        cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost);
+                        cudaCheck(cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost))
                         copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
                         cudaMemset(devOutput, 0, cRows * cCols * sizeof(float));
                     }
@@ -487,13 +501,13 @@ int main(int argc, char** argv)
             } else { // single MM to produce the join matrix
                 transpose(hostInvInput, hostInput, heavyElements, heavySets);
 
-                cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice);
-                cudaMemcpy(devInvInput, hostInvInput, heavyElements * heavySets * sizeof(float), cudaMemcpyHostToDevice);
+                cudaCheck(cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
+                cudaCheck(cudaMemcpy(devInvInput, hostInvInput, heavyElements * heavySets * sizeof(float), cudaMemcpyHostToDevice))
 
-                float alpha = 1.f;
-                float beta = 0.f;
+                float alpha = 1.0;
+                float beta = 0.0;
 
-                cudaMalloc((void**) &devOutput, heavySets * heavySets * sizeof(float));
+                cudaCheck(cudaMalloc((void**) &devOutput, heavySets * heavySets * sizeof(float)))
 
                 // https://peterwittek.com/cublas-matrix-c-style.html
                 cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
@@ -502,7 +516,7 @@ int main(int argc, char** argv)
                             devInput, heavyElements,
                             &beta, devOutput, heavySets);
 
-                cudaMemcpy(hostOutput, devOutput, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost);
+                cudaCheck(cudaMemcpy(hostOutput, devOutput, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost))
             }
 
             cudaFree(devInput);

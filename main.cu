@@ -60,7 +60,7 @@ void transpose(float* out, const float* in, int rows, int cols) {
     }
 }
 
-void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols, unsigned int offset)
+void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols)
 {
     unsigned int c = 0;
     for (unsigned int i = 0; i < rows; ++i) {
@@ -173,14 +173,15 @@ int main(int argc, char** argv)
             }
         }
 
-        timer t;
+        host_timer hostTimer;
+        device_timer deviceTimer;
 
         std::string inputPath = result["input"].as<std::string>();
         unsigned int universe = 0;
 
-        timer::Interval* readInput = t.add("Read input");
+        host_timer::Interval* readInput = hostTimer.add("Read input");
         sets collection = readSets(inputPath, universe);
-        timer::finish(readInput);
+        host_timer::finish(readInput);
 
         inverted_index index(universe);
         std::vector<degree_pair> degreeSet;
@@ -190,7 +191,7 @@ int main(int argc, char** argv)
         size_t relationSize = 0; // aka total number of elements for input relation
         size_t fullJoinSize = 0;
 
-        timer::Interval* constructIndex = t.add("Construct Index");
+        host_timer::Interval* constructIndex = hostTimer.add("Construct Index");
         for (auto& s : collection) {
             if (!scj && s.elements.size() < c) continue;
             for (auto& el : s.elements) {
@@ -199,9 +200,9 @@ int main(int argc, char** argv)
             relationSize += s.elements.size();
             degreeSet.push_back(std::make_pair(s.elements.size(), s.id));
         }
-        timer::finish(constructIndex);
+        host_timer::finish(constructIndex);
 
-        timer::Interval* constructArrays = t.add("Construct arrays");
+        host_timer::Interval* constructArrays = hostTimer.add("Construct arrays");
         unsigned int invListSize = 0;
         for (auto& s : collection) {
             for (auto& el : s.elements) {
@@ -217,9 +218,9 @@ int main(int argc, char** argv)
             degreeElement.push_back(std::make_pair(invList.size(), element++));
             fullJoinSize += invList.size() * invList.size();
         }
-        timer::finish(constructArrays);
+        host_timer::finish(constructArrays);
 
-        timer::Interval* sortArrays = t.add("Sort arrays");
+        host_timer::Interval* sortArrays = hostTimer.add("Sort arrays");
         sort(degreeSet.begin(), degreeSet.end(), [] (const degree_pair& a, degree_pair& b) {
             return a.first < b.first;
         });
@@ -233,10 +234,10 @@ int main(int argc, char** argv)
         sort(elementCDF.begin(), elementCDF.end(), [] (const cdf_pair& a, const cdf_pair& b) {
             return a.first < b.first;
         });
-        timer::finish(sortArrays);
+        host_timer::finish(sortArrays);
 
 
-        timer::Interval* constructCDF = t.add("Construct CDF");
+        host_timer::Interval* constructCDF = hostTimer.add("Construct CDF");
         for (int i = 0 ; i < elementCDF.size(); i++) {
             if (i == 0)
                 elementCDF.at(i).second = elementCDF.at(i).second * elementCDF.at(i).second;
@@ -248,15 +249,15 @@ int main(int argc, char** argv)
             if (i > 0)
                 setCDF.at(i).second += setCDF.at(i - 1).second;
         }
-        timer::finish(constructCDF);
+        host_timer::finish(constructCDF);
 
         if (!overrideOptimizer) {
-            timer::Interval* costBasedOptimize = t.add("Cost-based optimize");
+            host_timer::Interval* costBasedOptimize = hostTimer.add("Cost-based optimize");
             degree_pair opt = optimize(collection, eps, iterations, relationSize, fullJoinSize, rf,
                                        degreeSet, degreeElement, setCDF, elementCDF);
             deltaSet = opt.second;
             deltaElement = opt.first;
-            timer::finish(costBasedOptimize);
+            host_timer::finish(costBasedOptimize);
         }
 
         // find bounds for light/heavy sets
@@ -337,7 +338,7 @@ int main(int argc, char** argv)
         uint_vector counts(threads, 0);
         omp_set_num_threads(threads);
 
-        timer::Interval* indexBasedLightJoin = t.add("Index-based join (light)");
+        host_timer::Interval* indexBasedLightJoin = hostTimer.add("Index-based join (light)");
         #pragma omp parallel
         {
             int threadNumber = omp_get_thread_num();
@@ -377,20 +378,25 @@ int main(int argc, char** argv)
 
             counts[threadNumber] = counter;
         }
-        timer::finish(indexBasedLightJoin);
+        host_timer::finish(indexBasedLightJoin);
 
         if (heavySets > 0) {
-            timer::Interval* matrixMultiplication = t.add("Matrix multiplication");
+            host_timer::Interval* matrixMultiplication = hostTimer.add("Matrix multiplication");
             std::unordered_map<unsigned int, unsigned int> heavyElementMap(heavyElements);
             unsigned int columnIndex = 0;
             for (unsigned int i = lightElements; i < degreeElement.size(); ++i) {
                 heavyElementMap[degreeElement[i].second] = columnIndex++;
             }
 
-            float* hostRawInput = new float[heavySets * heavyElements];
-            float* hostInput = new float[heavySets * heavyElements];
-            float* hostInvInput = new float[heavyElements * heavySets];
-            float* hostOutput = new float[heavySets * heavySets];
+            float* hostRawInput;
+            float* hostInput;
+            float* hostInvInput;
+            float* hostOutput;
+
+            cudaCheck(cudaMallocHost((void**)&hostRawInput, heavySets * heavyElements * sizeof(float)))
+            cudaCheck(cudaMallocHost((void**)&hostInput, heavySets * heavyElements * sizeof(float)))
+            cudaCheck(cudaMallocHost((void**)&hostInvInput, heavySets * heavyElements * sizeof(float)))
+            cudaCheck(cudaMallocHost((void**)&hostOutput, heavySets * heavySets * sizeof(float)))
 
             unsigned int idx = 0; // used to determine column index
             for (unsigned int i = heavySetLow; i < heavySetHigh; ++i) {
@@ -410,8 +416,10 @@ int main(int argc, char** argv)
             float* devOutput;
 
             // allocate GPU memory
-            cudaCheck(cudaMalloc((void**) &devInput, heavySets * heavyElements * sizeof(float)));
-            cudaCheck(cudaMalloc((void**) &devInvInput, heavySets * heavyElements * sizeof(float)));
+            device_timer::EventPair* allocInput = deviceTimer.add("Allocate memory");
+            cudaCheck(cudaMalloc((void**) &devInput, heavySets * heavyElements * sizeof(float)))
+            cudaCheck(cudaMalloc((void**) &devInvInput, heavySets * heavyElements * sizeof(float)))
+            device_timer::finish(allocInput);
 
             // check if tiling is required, this is determined by the available GPU memory
             // if the complete output join matrix fits in GPU memory we call MM only once,
@@ -454,11 +462,18 @@ int main(int argc, char** argv)
                     }
                 }
 
-                float* hostBlock = new float[tileCells];
+                float* hostBlock;
+                cudaCheck(cudaMallocHost((void**)&hostBlock, tileCells * sizeof(float)))
 
+
+                device_timer::EventPair* transferInput = deviceTimer.add("Transfer data");
                 cudaCheck(cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
                 cudaCheck(cudaMemcpy(devInvInput, hostInvInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
+                device_timer::finish(transferInput);
+
+                device_timer::EventPair* allocOutput = deviceTimer.add("Allocate memory");
                 cudaCheck(cudaMalloc((void**) &devOutput, tileCells * sizeof(float)))
+                device_timer::finish(allocOutput);
 
                 float alpha = 1.0;
                 float beta = 1.0;
@@ -485,50 +500,66 @@ int main(int argc, char** argv)
                             cRows = aRows;
                             cCols = bCols;
 
+                            device_timer::EventPair* mm = deviceTimer.add("Matrix multiplication");
                             auto status = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                         bCols, aRows, aCols,
                                         &alpha, thrust::raw_pointer_cast(&devInvInput[0] + bOffset), bCols,
                                         thrust::raw_pointer_cast(&devInput[0] + aOffset), aCols,
                                         &beta, thrust::raw_pointer_cast(&devOutput[0]), cCols);
-                            cudaDeviceSynchronize();
-
+                            device_timer::finish(mm);
                         }
+                        device_timer::EventPair* transferOutput = deviceTimer.add("Transfer data");
                         cudaCheck(cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost))
-                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
+                        device_timer::finish(transferOutput);
+
+                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols);
+
+                        device_timer::EventPair* clearMem = deviceTimer.add("Clear memory");
                         cudaMemset(devOutput, 0, cRows * cCols * sizeof(float));
+                        device_timer::finish(clearMem);
                     }
                 }
             } else { // single MM to produce the join matrix
                 transpose(hostInvInput, hostInput, heavyElements, heavySets);
 
+                device_timer::EventPair* transferInput = deviceTimer.add("Transfer data");
                 cudaCheck(cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
                 cudaCheck(cudaMemcpy(devInvInput, hostInvInput, heavyElements * heavySets * sizeof(float), cudaMemcpyHostToDevice))
+                device_timer::finish(transferInput);
 
                 float alpha = 1.0;
                 float beta = 0.0;
 
+                device_timer::EventPair* allocOutput = deviceTimer.add("Allocate memory");
                 cudaCheck(cudaMalloc((void**) &devOutput, heavySets * heavySets * sizeof(float)))
+                device_timer::finish(allocOutput);
 
+                device_timer::EventPair* mm = deviceTimer.add("Matrix multiplication");
                 // https://peterwittek.com/cublas-matrix-c-style.html
                 cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                             heavySets, heavySets, heavyElements,
                             &alpha, devInvInput, heavySets,
                             devInput, heavyElements,
                             &beta, devOutput, heavySets);
+                device_timer::finish(mm);
 
+                device_timer::EventPair* transferOutput = deviceTimer.add("Transfer data");
                 cudaCheck(cudaMemcpy(hostOutput, devOutput, heavySets * heavySets * sizeof(float), cudaMemcpyDeviceToHost))
+                device_timer::finish(transferOutput);
             }
 
+            device_timer::EventPair* freeMem = deviceTimer.add("Free memory");
             cudaFree(devInput);
             cudaFree(devInvInput);
             cudaFree(devOutput);
+            device_timer::finish(freeMem);
 
             cublasDestroy_v2(handle);
 
-            timer::finish(matrixMultiplication);
+            host_timer::finish(matrixMultiplication);
 
 
-            timer::Interval* indexBasedHeavyJoin = t.add("Index-based join (heavy)");
+            host_timer::Interval* indexBasedHeavyJoin = hostTimer.add("Index-based join (heavy)");
             #pragma omp parallel
             {
                 int threadNumber = omp_get_thread_num();
@@ -578,10 +609,11 @@ int main(int argc, char** argv)
 
                 counts[threadNumber] += counter;
             }
-            timer::finish(indexBasedHeavyJoin);
+            host_timer::finish(indexBasedHeavyJoin);
         }
 
-        t.print();
+        hostTimer.print();
+        deviceTimer.print();
 
         // debug
         // fmt::print("{}\n", counts);

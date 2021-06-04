@@ -11,7 +11,7 @@
 #include <fmt/core.h>
 
 
-struct timer {
+struct host_timer {
     struct Interval {
         typedef std::chrono::high_resolution_clock::time_point interval_point;
         interval_point begin;
@@ -60,10 +60,77 @@ struct timer {
         fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, "Total", total() / 1000.0);
         fmt::print("└{1:─^{0}}┘\n", 51, "");
     }
-    ~timer() {
+    ~host_timer() {
         auto it = intervals.begin();
         for(; it != intervals.end(); ++it) delete *it;
     }
+};
+
+struct device_timer {
+    struct EventPair {
+        std::string name;
+        cudaEvent_t start;
+        cudaEvent_t end;
+        cudaStream_t stream;
+        EventPair(std::string const& argName, cudaStream_t const& argStream) : name(argName), stream(argStream)  {}
+    };
+    std::vector<EventPair*> pairs;
+    EventPair* add(std::string const& name, cudaStream_t const& stream = 0) {
+        auto pair = new EventPair(name, stream);
+        cudaEventCreate(&(pair->start));
+        cudaEventCreate(&(pair->end));
+
+        cudaEventRecord(pair->start, stream);
+
+        pairs.push_back(pair);
+        return pair;
+    }
+    static void finish(EventPair* pair) {
+        cudaEventRecord(pair->end, pair->stream);
+    }
+    float sum(std::string const &name) const {
+        float total = 0.0;
+        auto it = pairs.begin();
+        for(; it != pairs.end(); ++it) {
+            if ((*it)->name == name) {
+                float millis = 0.0;
+                cudaEventElapsedTime(&millis, (*it)->start, (*it)->end);
+                total += millis;
+            }
+        }
+        return total;
+    }
+    float total() const {
+        float total = 0.0;
+        auto it = pairs.begin();
+        for(; it != pairs.end(); ++it) {
+            float millis = 0.0;
+            cudaEventElapsedTime(&millis, (*it)->start, (*it)->end);
+            total += millis;
+        }
+        return total;
+    }
+    void print() {
+        fmt::print("┌{0:─^{1}}┐\n", "GPU Timings (in ms)", 51);
+        std::vector<std::string> distinctNames;
+        for(auto& pair : pairs) {
+            if (std::find(distinctNames.begin(), distinctNames.end(), pair->name) == distinctNames.end())
+                distinctNames.push_back(pair->name);
+        }
+        for(auto& name : distinctNames) {
+            fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, name, sum(name));
+        }
+        fmt::print("└{1:─^{0}}┘\n", 51, "");
+        fmt::print("│{1: ^{0}}|{2: ^{0}}│\n", 25, "Total", total());
+        fmt::print("└{1:─^{0}}┘\n", 51, "");
+    }
+    ~device_timer() {
+        for (auto& pair : pairs) {
+            cudaEventDestroy(pair->start);
+            cudaEventDestroy(pair->end);
+            delete pair;
+        }
+    };
 };
 
 

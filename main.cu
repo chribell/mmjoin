@@ -320,8 +320,8 @@ int main(int argc, char** argv)
 
         cudaMemGetInfo(&freeDeviceMemory, &totalDeviceMemory);
 
-        // subtract 100MB from free GPU memory
-        freeDeviceMemory -= 100 * 1048576;
+        // subtract 500MB from free GPU memory
+        freeDeviceMemory -= 500 * 1048576;
 
         fmt::print(
                 "┌{0:─^{1}}┐\n"
@@ -484,6 +484,8 @@ int main(int argc, char** argv)
                         unsigned int cRows = 0;
                         unsigned int cCols = 0;
 
+                        if ((i * tilesY) > (j * tilesY)) continue;
+
                         for (unsigned int k = 0; k < tilesY; ++k) {
 
                             tile& tileA = tiles[(i * tilesY) + k]; // sets x elements
@@ -520,10 +522,10 @@ int main(int argc, char** argv)
                     }
                 }
             } else { // single MM to produce the join matrix
-                transpose(hostInvInput, hostInput, heavyElements, heavySets);
+                transpose(hostInvInput, hostRawInput, heavyElements, heavySets);
 
                 device_timer::EventPair* transferInput = deviceTimer.add("Transfer data");
-                cudaCheck(cudaMemcpy(devInput, hostInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
+                cudaCheck(cudaMemcpy(devInput, hostRawInput, heavySets * heavyElements * sizeof(float), cudaMemcpyHostToDevice))
                 cudaCheck(cudaMemcpy(devInvInput, hostInvInput, heavyElements * heavySets * sizeof(float), cudaMemcpyHostToDevice))
                 device_timer::finish(transferInput);
 
@@ -557,7 +559,6 @@ int main(int argc, char** argv)
             cublasDestroy_v2(handle);
 
             host_timer::finish(matrixMultiplication);
-
 
             host_timer::Interval* indexBasedHeavyJoin = hostTimer.add("Index-based join (heavy)");
             #pragma omp parallel
@@ -594,8 +595,8 @@ int main(int argc, char** argv)
                     }
 
                     // add intersections from matrix multiplication
-                    for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
-                        joinVector[colIndex] += (unsigned int) hostOutput[rowIndex * heavyElements + colIndex];
+                    for (unsigned int colIndex = colStart; colIndex < heavySets; ++colIndex) {
+                        joinVector[colIndex] += (unsigned int) hostOutput[rowIndex * heavySets + colIndex];
                     }
 
                     if (scj) {

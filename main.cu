@@ -15,7 +15,6 @@
 //#include <fmt/ranges.h>
 #include "timer.hpp"
 #include "input.hpp"
-#include <thrust/device_ptr.h>
 
 #define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -60,13 +59,14 @@ void transpose(float* out, const float* in, int rows, int cols) {
     }
 }
 
-void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols)
+void copyTile(float* out, const float* in, unsigned int rows, unsigned int cols, unsigned int offset)
 {
-    unsigned int c = 0;
+    size_t c = 0;
     for (unsigned int i = 0; i < rows; ++i) {
         for (unsigned int j = 0; j < cols; ++j) {
             out[j] = in[c++];
         }
+        out += offset;
     }
 }
 
@@ -505,16 +505,16 @@ int main(int argc, char** argv)
                             device_timer::EventPair* mm = deviceTimer.add("Matrix multiplication");
                             auto status = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
                                         bCols, aRows, aCols,
-                                        &alpha, thrust::raw_pointer_cast(&devInvInput[0] + bOffset), bCols,
-                                        thrust::raw_pointer_cast(&devInput[0] + aOffset), aCols,
-                                        &beta, thrust::raw_pointer_cast(&devOutput[0]), cCols);
+                                        &alpha, devInvInput + bOffset, bCols,
+                                        devInput + aOffset, aCols,
+                                        &beta, devOutput, cCols);
                             device_timer::finish(mm);
                         }
                         device_timer::EventPair* transferOutput = deviceTimer.add("Transfer data");
                         cudaCheck(cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost))
                         device_timer::finish(transferOutput);
 
-                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols);
+                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
 
                         device_timer::EventPair* clearMem = deviceTimer.add("Clear memory");
                         cudaMemset(devOutput, 0, cRows * cCols * sizeof(float));

@@ -339,45 +339,45 @@ int main(int argc, char** argv)
         omp_set_num_threads(threads);
 
         host_timer::Interval* indexBasedLightJoin = hostTimer.add("Index-based join (light)");
-        #pragma omp parallel
-        {
-            int threadNumber = omp_get_thread_num();
-            uint_vector joinVector(collection.size());
-
-            // calculate thread bounds
-            unsigned int lower = lightSets * threadNumber / threads;
-            unsigned int upper = lightSets * (threadNumber + 1) / threads;
-
-            // debug
-            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
-
-            unsigned int counter = 0;
-
-            for (unsigned int i = lower; i < upper; ++i) {
-                auto& probe = collection[i].elements;
-                unsigned int offset = i + 1;
-
-                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
-                for (auto& el : probe) {
-                    auto& list = index[el];
-                    for (auto& set : list) {
-                        if (set > i) {
-                            joinVector[set]++;
-                        }
-                    }
-                }
-
-                if (scj) {
-                    c = probe.size();
-                }
-
-                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
-                    return intersection >= c;
-                });
-            }
-
-            counts[threadNumber] = counter;
-        }
+//        #pragma omp parallel
+//        {
+//            int threadNumber = omp_get_thread_num();
+//            uint_vector joinVector(collection.size());
+//
+//            // calculate thread bounds
+//            unsigned int lower = lightSets * threadNumber / threads;
+//            unsigned int upper = lightSets * (threadNumber + 1) / threads;
+//
+//            // debug
+//            // fmt::print("Light sets | Thread {}: [ {} - {} )\n", threadNumber, lower, upper);
+//
+//            unsigned int counter = 0;
+//
+//            for (unsigned int i = lower; i < upper; ++i) {
+//                auto& probe = collection[i].elements;
+//                unsigned int offset = i + 1;
+//
+//                std::fill(joinVector.begin() + offset, joinVector.end(), 0);
+//                for (auto& el : probe) {
+//                    auto& list = index[el];
+//                    for (auto& set : list) {
+//                        if (set > i) {
+//                            joinVector[set]++;
+//                        }
+//                    }
+//                }
+//
+//                if (scj) {
+//                    c = probe.size();
+//                }
+//
+//                counter += std::count_if(joinVector.begin() + offset, joinVector.end(), [c](unsigned int intersection) {
+//                    return intersection >= c;
+//                });
+//            }
+//
+//            counts[threadNumber] = counter;
+//        }
         host_timer::finish(indexBasedLightJoin);
 
         if (heavySets > 0) {
@@ -462,8 +462,9 @@ int main(int argc, char** argv)
                     }
                 }
 
-                float* hostBlock;
-                cudaCheck(cudaMallocHost((void**)&hostBlock, tileCells * sizeof(float)))
+                // redundant since we use cudaMemcpy2D
+                //float* hostBlock;
+                //cudaCheck(cudaMallocHost((void**)&hostBlock, tileCells * sizeof(float)))
 
 
                 device_timer::EventPair* transferInput = deviceTimer.add("Transfer data");
@@ -511,10 +512,15 @@ int main(int argc, char** argv)
                             device_timer::finish(mm);
                         }
                         device_timer::EventPair* transferOutput = deviceTimer.add("Transfer data");
-                        cudaCheck(cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost))
+                        cudaCheck(cudaMemcpy2D(hostOutput + ((i * tileSets * heavySets) + tileSets * j),
+                                               heavySets * sizeof(float),
+                                               devOutput,
+                                               cCols * sizeof(float), cCols * sizeof(float), cRows, cudaMemcpyDeviceToHost))
+                        // cudaCheck(cudaMemcpy(hostBlock, devOutput, cRows * cCols * sizeof(float), cudaMemcpyDeviceToHost))
                         device_timer::finish(transferOutput);
 
-                        copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
+                        // redundant since we use cudaMemcpy2D
+                        // copyTile(hostOutput + ((i * tileSets * heavySets) + tileSets * j), hostBlock, cRows, cCols, heavySets);
 
                         device_timer::EventPair* clearMem = deviceTimer.add("Clear memory");
                         cudaMemset(devOutput, 0, cRows * cCols * sizeof(float));

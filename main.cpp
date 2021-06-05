@@ -401,7 +401,7 @@ int main(int argc, char** argv)
                 }
 
                 // add intersections from matrix multiplication
-                for (unsigned int colIndex = colStart; colIndex < heavyElements + 1; ++colIndex) {
+                for (unsigned int colIndex = colStart; colIndex < heavySets; ++colIndex) {
                     joinVector[colIndex] += (unsigned int) B.coeff(rowIndex, colIndex);
                 }
 

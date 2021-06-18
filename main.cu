@@ -264,11 +264,11 @@ int main(int argc, char** argv)
         // x is the cut-off point to distinguish light from heavy sets
         auto x = std::lower_bound(degreeSet.begin(), degreeSet.end(), std::make_pair(deltaSet, (unsigned int) 0));
         // extra verbosity for ease
-        unsigned int lightSetHigh = x - degreeSet.begin();
-        unsigned int lightSets = lightSetHigh;
-        unsigned int heavySetLow = lightSetHigh;
-        unsigned int heavySetHigh = degreeSet.size();
-        unsigned int heavySets = heavySetHigh - heavySetLow;
+        unsigned long lightSetHigh = x - degreeSet.begin();
+        unsigned long lightSets = lightSetHigh;
+        unsigned long heavySetLow = lightSetHigh;
+        unsigned long heavySetHigh = degreeSet.size();
+        unsigned long heavySets = heavySetHigh - heavySetLow;
 
         // find the number of light/heavy elements respectively
         x = std::lower_bound(degreeElement.begin(), degreeElement.end(), std::make_pair(deltaElement, (unsigned int) 0));
